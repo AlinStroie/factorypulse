@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: factorypulse
+Version: 0.1.0
+Summary: Platforma de date industriale: ingestie, calitate, detectie de anomalii, agent RCA.
+Requires-Python: >=3.11
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+Requires-Dist: mypy>=1.10; extra == "dev"
