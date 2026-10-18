@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/factorypulse/__init__.py
-src/factorypulse.egg-info/PKG-INFO
-src/factorypulse.egg-info/SOURCES.txt
-src/factorypulse.egg-info/dependency_links.txt
-src/factorypulse.egg-info/requires.txt
-src/factorypulse.egg-info/top_level.txt
-tests/test_smoke.py

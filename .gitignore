@@ -7,3 +7,6 @@ __pycache__/
 .ruff_cache/
 data/
 *.parquet
+*.egg-info/
+build/
+dist/
