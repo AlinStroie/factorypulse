@@ -52,6 +52,9 @@ Tu le joci pe toate, dar le păstrezi separate: un PR nu se aprobă de același 
 - [ ] Commit-uri Conventional (`feat:`, `fix:`, `docs:`, `test:`, `chore:`).
 - [ ] Nu am lăsat cod comentat sau TODO fără work item.
 - [ ] Documentația și ADR-urile sunt la zi.
+- [ ] Ce are nevoie următorul sprint de la acest cod?
+- [ ] Checklistul a fost parcurs complet înainte de merge.
+- [ ] PR-ul are ca bază `main` (la PR-uri înlănțuite: reorientat pe `main` înainte de merge).
 
 ## 7. Git
 
