@@ -1,0 +1,9 @@
+# Dashboard-urile sunt JSON versionat in grafana/dashboards (FP-503).
+apiVersion: 1
+providers:
+  - name: factorypulse
+    folder: FactoryPulse
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

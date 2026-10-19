@@ -9,7 +9,7 @@ from asyncua.client.client import Client
 
 
 @contextlib.asynccontextmanager
-async def running(server: Coroutine[Any, Any, None]) -> AsyncIterator[None]:
+async def running(server: Coroutine[Any, Any, object]) -> AsyncIterator[None]:
     """Ruleaza serverul in fundal si il opreste la iesire, fara sa astepte durata lui."""
     task = asyncio.create_task(server)
     try:
