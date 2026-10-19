@@ -141,4 +141,6 @@ async def run(config: BridgeConfig) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # asyncua logheaza fiecare request la INFO; prea mult zgomot pentru 1 citire/secunda
+    logging.getLogger("asyncua").setLevel(logging.WARNING)
     asyncio.run(run(BridgeConfig.from_env()))

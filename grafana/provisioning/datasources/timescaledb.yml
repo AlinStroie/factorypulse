@@ -1,0 +1,16 @@
+# Sursa de date provizionata automat: nu se configureaza manual din UI.
+apiVersion: 1
+datasources:
+  - name: TimescaleDB
+    uid: timescaledb
+    type: grafana-postgresql-datasource
+    url: timescaledb:5432
+    user: ${POSTGRES_USER}
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable
+      timescaledb: true
+      postgresVersion: 1600
+    isDefault: true
