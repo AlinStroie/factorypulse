@@ -36,11 +36,49 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       timescaledb:
         condition: service_healthy
+
+  # Simulatorul si bridge-ul joaca rolul de "edge" (fabrica). Pornire: docker compose up --build
+  simulator:
+    build: .
+    command: ["python", "-m", "factorypulse.simulator.server"]
+    environment:
+      SIM_DURATION_S: ${SIM_DURATION_S:-86400}
+      SIM_FAULTS: ${SIM_FAULTS:-24}
+      SIM_SEED: ${SIM_SEED:-42}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "4840:4840"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 4840), 2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: on-failure
+
+  bridge:
+    build: .
+    command: ["python", "-m", "factorypulse.bridge.bridge"]
+    environment:
+      OPCUA_URL: opc.tcp://simulator:4840/factorypulse/server/
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+    depends_on:
+      emqx:
+        condition: service_healthy
+      simulator:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   timescale-data:

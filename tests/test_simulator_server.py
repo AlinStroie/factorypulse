@@ -13,10 +13,10 @@ from factorypulse.simulator.server import NAMESPACE_URI, run
 ENDPOINT = "opc.tcp://127.0.0.1:48410/factorypulse/test/"
 
 
-async def _read_while_running(ground_truth: Path) -> list[tuple[float, datetime]]:
+async def _read_while_running(ground_truth_dir: Path) -> list[tuple[float, datetime]]:
     schedule = FaultSchedule([Fault("motor", "temperatura", "supraincalzire", 0.0, 60.0, 12.0)])
     server = run(
-        ENDPOINT, 0.2, 42, faults=schedule, duration_s=60.0, ground_truth_path=ground_truth
+        ENDPOINT, 0.2, 42, faults=schedule, duration_s=60.0, ground_truth_dir=ground_truth_dir
     )
     async with running(server):
         client = await connect_when_ready(ENDPOINT)
@@ -40,8 +40,8 @@ async def _read_while_running(ground_truth: Path) -> list[tuple[float, datetime]
 
 def test_server_exposes_all_sensors_with_source_timestamp(tmp_path: Path) -> None:
     before = datetime.now(UTC)
-    ground_truth = tmp_path / "ground_truth.json"
-    values = asyncio.run(_read_while_running(ground_truth))
+    values = asyncio.run(_read_while_running(tmp_path))
+    [ground_truth] = tmp_path.glob("ground_truth_*.json")
 
     assert len(values) == sum(len(m.sensors) for m in MACHINES)
     started_at = FaultSchedule.load(ground_truth).started_at
