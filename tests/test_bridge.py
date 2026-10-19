@@ -7,15 +7,16 @@ from typing import Any, cast
 
 import pytest
 from asyncua import ua
-from asyncua.client.client import Client
 from asyncua.common.node import Node
 from asyncua.ua.status_codes import StatusCodes
+from opcua_helpers import connect_when_ready, running
 
 from factorypulse.bridge.bridge import (
     BridgeConfig,
     SensorRef,
     build_messages,
     discover_sensors,
+    make_mqtt_client,
     poll_once,
 )
 from factorypulse.simulator.model import MACHINES
@@ -71,13 +72,12 @@ def test_build_messages_skips_bad_status() -> None:
 
 
 async def _one_cycle() -> FakePublisher:
-    server = asyncio.create_task(run_server(ENDPOINT, 0.2, 7, duration_s=3.0))
-    await asyncio.sleep(1.5)
     publisher = FakePublisher()
-    async with Client(ENDPOINT) as opc:
+    async with running(run_server(ENDPOINT, 0.2, 7, duration_s=60.0)):
+        opc = await connect_when_ready(ENDPOINT)
         sensors = await discover_sensors(opc)
         await poll_once(opc, sensors, publisher)
-    await server
+        await opc.disconnect()
     return publisher
 
 
@@ -86,3 +86,10 @@ def test_poll_once_publishes_every_sensor_with_qos1() -> None:
     expected = {f"factory/{m.name}/{s.name}" for m in MACHINES for s in m.sensors}
     assert {topic for topic, _, _ in publisher.messages} == expected
     assert all(qos == 1 for _, _, qos in publisher.messages)
+
+
+def test_mqtt_client_keeps_session_for_qos1() -> None:
+    client = make_mqtt_client(BridgeConfig(mqtt_client_id="bridge-test", mqtt_username="u"))
+    assert client._client_id == b"bridge-test"
+    assert client._clean_session is False
+    assert client._username == b"u"

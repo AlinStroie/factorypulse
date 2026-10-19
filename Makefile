@@ -12,4 +12,4 @@ typecheck:
 	mypy
 
 test:
-	pytest
+	pytest --cov --cov-report=term
