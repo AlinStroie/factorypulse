@@ -63,7 +63,7 @@ Tu le joci pe toate, dar le păstrezi separate: un PR nu se aprobă de același 
 ## 8. Ceremonii (2 săptămâni)
 
 - **Refinement (1 oră, săptămâna 1, miercuri):** pregătești următorul sprint: stories, estimări, criterii.
-- **Planificare (ziua 1, ~1 oră):** alegi work items pentru sprint, în limita capacității (35 de ore).
+- **Planificare (ziua 1, ~1 oră):** alegi work items pentru sprint, în limita capacității (25 de ore: 2,5 ore pe zi × 10 zile).
 - **Daily (async, în journal, 5 minute):** ce ai făcut ieri, ce faci azi, ce te blochează.
 - **Review (ultima zi, ~45 minute):** demo cu date reale din sistem, nu slide-uri.
 - **Retrospectivă (ultima zi, ~30 minute):** 3 lucruri care au mers, 3 care nu, 1 acțiune pentru sprintul următor. Fișier în `docs/retro/`.
