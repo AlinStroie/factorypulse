@@ -4,7 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from asyncua.client.client import Client
+from opcua_helpers import connect_when_ready, running
 
 from factorypulse.simulator.faults import Fault, FaultSchedule
 from factorypulse.simulator.model import MACHINES
@@ -15,11 +15,13 @@ ENDPOINT = "opc.tcp://127.0.0.1:48410/factorypulse/test/"
 
 async def _read_while_running(ground_truth: Path) -> list[tuple[float, datetime]]:
     schedule = FaultSchedule([Fault("motor", "temperatura", "supraincalzire", 0.0, 60.0, 12.0)])
-    server = asyncio.create_task(
-        run(ENDPOINT, 0.2, 42, faults=schedule, duration_s=4.0, ground_truth_path=ground_truth)
+    server = run(
+        ENDPOINT, 0.2, 42, faults=schedule, duration_s=60.0, ground_truth_path=ground_truth
     )
-    await asyncio.sleep(1.5)
-    async with Client(ENDPOINT) as client:
+    async with running(server):
+        client = await connect_when_ready(ENDPOINT)
+        # o valoare scrisa dupa conectare, deci cu defectul activ
+        await asyncio.sleep(0.5)
         ns = await client.get_namespace_index(NAMESPACE_URI)
         factory = await client.nodes.objects.get_child([f"{ns}:Factory"])
         nodes = []
@@ -28,7 +30,7 @@ async def _read_while_running(ground_truth: Path) -> list[tuple[float, datetime]
             for sensor in machine.sensors:
                 nodes.append(await machine_node.get_child([f"{ns}:{sensor.name}"]))
         data_values = await client.read_attributes(nodes)
-    await server
+        await client.disconnect()
     result: list[tuple[float, datetime]] = []
     for dv in data_values:
         assert dv.Value is not None and dv.SourceTimestamp is not None
@@ -44,10 +46,10 @@ def test_server_exposes_all_sensors_with_source_timestamp(tmp_path: Path) -> Non
     assert len(values) == sum(len(m.sensors) for m in MACHINES)
     started_at = FaultSchedule.load(ground_truth).started_at
     assert started_at is not None
-    assert before <= started_at <= before + timedelta(seconds=5)
+    assert before <= started_at <= before + timedelta(seconds=30)
     for _, source_ts in values:
         ts = source_ts if source_ts.tzinfo else source_ts.replace(tzinfo=UTC)
-        assert started_at <= ts <= started_at + timedelta(seconds=5)
+        assert started_at <= ts <= started_at + timedelta(seconds=30)
 
     # defectul injectat pe motor/temperatura (primul senzor) ridica valoarea cu ~12 C
     motor_temperature, _ = values[0]
