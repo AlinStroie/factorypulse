@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = ["asyncua>=1.1", "paho-mqtt>=2.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5", "mypy>=1.10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -30,6 +30,16 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["factorypulse"]
+# sysmon (Python 3.12+) e mult mai rapid decat settrace: pornirea asyncua scade de la ~30 s la ~2 s
+core = "sysmon"
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = ['if __name__ == "__main__":']
 
 [[tool.mypy.overrides]]
 module = ["asyncua", "asyncua.*"]
