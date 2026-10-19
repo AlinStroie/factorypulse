@@ -30,11 +30,13 @@ async def run(
     seed: int,
     faults: FaultSchedule | None = None,
     duration_s: float | None = None,
-    ground_truth_path: Path | None = None,
-) -> None:
+    ground_truth_dir: Path | None = None,
+) -> Path | None:
     """Porneste serverul si scrie valori pana la `duration_s` (None = la nesfarsit).
 
     Fiecare valoare are SourceTimestamp = pornire + t, acelasi ceas ca eticheta de adevar.
+    Eticheta se salveaza intr-un fisier nou per rulare, ca o repornire sa nu o suprascrie.
+    Intoarce calea etichetei (None daca `ground_truth_dir` lipseste).
     """
     server = Server()
     await server.init()
@@ -59,7 +61,9 @@ async def run(
         started_at = datetime.now(UTC)
         start = time.monotonic()
         schedule.started_at = started_at
-        if ground_truth_path is not None:
+        ground_truth_path = None
+        if ground_truth_dir is not None:
+            ground_truth_path = ground_truth_dir / f"ground_truth_{started_at:%Y%m%dT%H%M%SZ}.json"
             schedule.save(ground_truth_path)
         log.info("simulator pornit la %s, %d defecte", started_at.isoformat(), len(schedule.faults))
 
@@ -78,6 +82,7 @@ async def run(
                     await nodes[(machine.name, sensor.name)].write_value(data_value)
             await asyncio.sleep(interval_s)
         log.info("simulator oprit dupa %.0f s", time.monotonic() - start)
+    return ground_truth_path
 
 
 def _parse_args() -> argparse.Namespace:
@@ -93,15 +98,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--faults", type=int, default=int(os.getenv("SIM_FAULTS", "3")))
     parser.add_argument(
-        "--ground-truth",
+        "--ground-truth-dir",
         type=Path,
-        default=Path(os.getenv("SIM_GROUND_TRUTH", "data/ground_truth.json")),
+        default=Path(os.getenv("SIM_GROUND_TRUTH_DIR", "data/ground_truth")),
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # asyncua logheaza fiecare request la INFO; prea mult zgomot pentru 1 citire/secunda
+    logging.getLogger("asyncua").setLevel(logging.WARNING)
     args = _parse_args()
     schedule = random_schedule(seed=args.seed, duration_s=args.duration_s, count=args.faults)
     asyncio.run(
@@ -111,6 +118,6 @@ if __name__ == "__main__":
             args.seed,
             faults=schedule,
             duration_s=args.duration_s,
-            ground_truth_path=args.ground_truth,
+            ground_truth_dir=args.ground_truth_dir,
         )
     )
