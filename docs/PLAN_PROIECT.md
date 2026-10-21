@@ -109,7 +109,7 @@ Ritm: 2,5 ore pe zi, cinci zile pe săptămână. E capacitatea reală din Sprin
 - FP-204 (feat): validare de bază (tip, interval, timestamp în ordine) și carantină. AC: înregistrările invalide ajung în tabelul `quarantine`.
 - FP-205 (feat): job care construiește silver din bronze. AC: silver are tipuri corecte și fără duplicate.
 - FP-206 (test): teste de integrare cu containere. AC: rulează în CI.
-- FP-207 (feat, ADR-017): job PySpark bronze → silver. AC: rezultate identice cu varianta Pandas pe același set de date.
+- FP-207 (feat, ADR-017, mutat în Sprint 3 la planificare, pentru capacitate): job PySpark bronze → silver. AC: rezultate identice cu varianta Pandas pe același set de date.
 - FP-208 (feat, ADR-021): validarea contractului v1 în ingestor (pydantic), cu `ingestion_ts` adăugat. AC: mesajele cu câmpuri lipsă, tipuri greșite sau `ts` în afara ferestrei ajung în carantină, cu motiv.
 - FP-209 (feat, ADR-022): metrici Prometheus în ingestor (mesaje, carantină, latență) și Prometheus în compose. AC: metricile apar în Prometheus.
 
@@ -208,10 +208,10 @@ Recruiterii și inginerii de date întreabă de obicei: „de ce ai ales asta?�
 Înainte de Sprintul 1:
 - [x] ADR-001 până la ADR-018 scrise și acceptate
 - [x] Docker, Python 3.12 și cont GitHub verificate
-- [ ] Primul journal creat (lipsă în Sprint 1, deși DoD-ul cere o intrare per ticket)
+- [x] Primul journal creat (scris la finalul Sprintului 1; de acum, zilnic)
 - [x] Board cu ticketele Sprintului 1 (Azure Boards)
 
 Înainte de Sprintul 2:
-- [ ] Retrospectiva Sprintului 1 în `docs/retro/` (șablon: `docs/retro/TEMPLATE.md`)
+- [x] Retrospectiva Sprintului 1 în `docs/retro/` (șablon: `docs/retro/TEMPLATE.md`)
 - [ ] ADR-019…022 citite și înțelese
-- [ ] Work items FP-201…209 în Azure Boards, inclusiv cele noi (FP-208, FP-209)
+- [x] Work items FP-201…209 în Azure Boards, inclusiv cele noi (FP-208, FP-209)

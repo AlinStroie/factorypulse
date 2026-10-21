@@ -1,4 +1,4 @@
-# O singura imagine pentru simulator si bridge; comanda se alege in docker-compose.yml.
+# O singura imagine pentru simulator, bridge si ingestor; comanda se alege in docker-compose.yml.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
