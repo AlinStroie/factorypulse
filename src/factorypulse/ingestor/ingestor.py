@@ -82,7 +82,7 @@ class IngestorConfig:
 
 
 class Writer(Protocol):
-    def write(self, readings: list[Reading]) -> None: ...
+    def write(self, readings: list[Reading]) -> int: ...
 
 
 class Acker(Protocol):
@@ -109,7 +109,7 @@ class Ingestor:
     def step(self) -> int:
         """Asteapta cel mult cat mai are lotul curent, apoi scrie lotul daca e gata.
 
-        Intoarce numarul de randuri scrise (0 daca lotul nu era gata).
+        Intoarce numarul de randuri noi scrise (0 daca lotul nu era gata).
         """
         try:
             item = self._inbox.get(timeout=self._batch.seconds_left(self._clock()))
@@ -133,11 +133,14 @@ class Ingestor:
                 # altfel brokerul l-ar retrimite la nesfarsit.
                 log.warning("mesaj ignorat (mid=%d): %s", item.mid, exc)
         # FP-203: bronze (Parquet) se scrie aici, inaintea TimescaleDB (ADR-020).
-        self._writer.write(readings)
+        written = self._writer.write(readings)
+        if written < len(readings):
+            # Normal dupa o repornire: brokerul retrimite mesajele scrise, dar neconfirmate.
+            log.info("%d randuri existau deja (FP-202)", len(readings) - written)
         for item in items:
             self._acker.ack(item.mid, item.qos)
         self._batch.take()
-        return len(readings)
+        return written
 
 
 def make_mqtt_client(config: IngestorConfig, inbox: queue.Queue[Received]) -> mqtt.Client:
@@ -196,8 +199,8 @@ def run(config: IngestorConfig) -> None:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, config.max_backoff_s)
             else:
+                backoff = 1.0
                 if written:
-                    backoff = 1.0
                     log.debug("scrise %d randuri", written)
     finally:
         mqtt_client.loop_stop()
