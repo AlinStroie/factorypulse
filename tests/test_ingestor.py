@@ -2,7 +2,7 @@
 
 import json
 import queue
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -10,6 +10,7 @@ from paho.mqtt.client import MQTTMessage
 
 from factorypulse.bridge.mapping import payload_for
 from factorypulse.ingestor.batch import Batch, Reading, Received, parse
+from factorypulse.ingestor.db import MIGRATIONS, pending_migrations
 from factorypulse.ingestor.ingestor import Ingestor, IngestorConfig, make_mqtt_client
 
 WHEN = datetime(2026, 10, 21, 8, 0, 0, tzinfo=UTC)
@@ -17,7 +18,9 @@ INGESTED = datetime(2026, 10, 21, 8, 0, 1, tzinfo=UTC)
 
 
 def _msg(mid: int, payload: str | None = None) -> Received:
-    body = payload if payload is not None else payload_for("motor", "temperatura", 65.0, "C", WHEN)
+    # ts diferit per mid, ca mesajele sa nu fie duplicate unele ale altora
+    when = WHEN + timedelta(seconds=mid)
+    body = payload if payload is not None else payload_for("motor", "temperatura", 65.0, "C", when)
     return Received(body.encode(), mid, 1, INGESTED)
 
 
@@ -30,14 +33,20 @@ class FakeClock:
 
 
 class FakeWriter:
+    """Imita cheia unica din FP-202: un rand cu aceeasi (masina, senzor, ts) nu se rescrie."""
+
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.batches: list[list[Reading]] = []
+        self.keys: set[tuple[str, str, datetime]] = set()
 
-    def write(self, readings: list[Reading]) -> None:
+    def write(self, readings: list[Reading]) -> int:
         if self.fail:
             raise ConnectionError("baza indisponibila")
         self.batches.append(list(readings))
+        new = {(r.machine, r.sensor, r.ts) for r in readings} - self.keys
+        self.keys |= new
+        return len(new)
 
 
 class FakeAcker:
@@ -59,7 +68,7 @@ def _ingestor(
 
 
 def test_parse_reads_bridge_payload() -> None:
-    reading = parse(_msg(1))
+    reading = parse(_msg(0))
     assert reading == Reading("motor", "temperatura", WHEN, 65.0, "C", INGESTED)
 
 
@@ -167,6 +176,20 @@ def test_invalid_message_is_acked_but_not_written() -> None:
     assert acker.acked == [1, 2]
 
 
+def test_redelivered_batch_is_acked_without_new_rows() -> None:
+    # Ingestorul a scris lotul, dar a cazut inainte de ack: brokerul il retrimite.
+    inbox: queue.Queue[Received] = queue.Queue()
+    writer, acker = FakeWriter(), FakeAcker()
+    ingestor, _ = _ingestor(inbox, writer, acker, size=1)
+    payload = payload_for("motor", "temperatura", 65.0, "C", WHEN)
+    inbox.put(_msg(1, payload))
+    assert ingestor.step() == 1
+    inbox.put(_msg(2, payload))  # acelasi payload, mid nou de la broker
+    assert ingestor.step() == 0
+    assert acker.acked == [1, 2]
+    assert len(writer.keys) == 1
+
+
 # --- MQTT si configurare -------------------------------------------------------------------
 
 
@@ -196,3 +219,16 @@ def test_conninfo_without_password() -> None:
     conninfo = IngestorConfig(pg_password=None).conninfo()
     assert "password" not in conninfo
     assert "dbname=factorypulse" in conninfo
+
+
+# --- migrari -------------------------------------------------------------------------------
+
+
+def test_migrations_are_numbered_in_order() -> None:
+    versions = [v for v, _ in MIGRATIONS]
+    assert versions == list(range(1, len(MIGRATIONS) + 1))
+
+
+def test_pending_migrations_skips_applied() -> None:
+    assert [v for v, _ in pending_migrations({1})] == [2]
+    assert pending_migrations({v for v, _ in MIGRATIONS}) == []
