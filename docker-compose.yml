@@ -8,6 +8,11 @@ services:
       - "18083:18083"
     environment:
       EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD}
+      # Ingestorul confirma mesajele abia dupa commit, in loturi de pana la 500.
+      # Implicit EMQX trimite doar 32 de mesaje neconfirmate per client; peste prag asteapta.
+      EMQX_MQTT__MAX_INFLIGHT: "1000"
+      # Coada pastrata cat ingestorul e oprit: ~2 h la 13 mesaje/s (implicit 1000, ~77 s).
+      EMQX_MQTT__MAX_MQUEUE_LEN: "100000"
     healthcheck:
       test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
       interval: 10s
@@ -17,7 +22,8 @@ services:
   timescaledb:
     image: timescale/timescaledb:2.17.2-pg16
     ports:
-      - "5432:5432"
+      # Portul de pe host se poate schimba daca 5432 e ocupat (de ex. un PostgreSQL local)
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -77,6 +83,23 @@ services:
       emqx:
         condition: service_healthy
       simulator:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ingestor:
+    build: .
+    command: ["python", "-m", "factorypulse.ingestor.ingestor"]
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+      POSTGRES_HOST: timescaledb
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    depends_on:
+      emqx:
+        condition: service_healthy
+      timescaledb:
         condition: service_healthy
     restart: unless-stopped
 
