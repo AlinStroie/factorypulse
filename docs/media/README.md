@@ -16,6 +16,7 @@ Reguli:
 | 03 | [`sprint-2/03-emqx-clienti.png`](sprint-2/03-emqx-clienti.png) | 2026-10-22 | Rulare | Bridge-ul și ingestorul conectați la EMQX, cu `Clean Session = false` (sesiune persistentă) |
 | 04 | [`sprint-2/04-emqx-ingestor-sesiune.png`](sprint-2/04-emqx-ingestor-sesiune.png) | 2026-10-22 | Rulare | Sesiunea ingestorului: inflight 13/1000 și coada 0/100000, adică setările din `docker-compose.yml` (FP-201) |
 | 05 | [`sprint-2/05-grafana-telemetrie-timescaledb.png`](sprint-2/05-grafana-telemetrie-timescaledb.png) | 2026-10-22 | Rezultat | Telemetria scrisă de ingestor în TimescaleDB, interogată din Grafana (temperatura pe mașină, medie pe 5 s) |
+| 06 | [`sprint-2/06-grafana-defect-presiune-pompa.png`](sprint-2/06-grafana-defect-presiune-pompa.png) | 2026-10-22 | Rezultat | Primul defect injectat de simulator (`scadere_presiune`, pompa) vizibil în TimescaleDB: presiunea scade de la ~5,9 la ~4,7 bar exact în intervalul din eticheta de adevăr (18:16:48–18:23:31 UTC; graficul e în ora României, 21:16–21:23). Datele de intrare pentru detecția din Sprintul 4 |
 
 ### Compactarea bronze pe date reale (FP-203, ADR-025)
 
@@ -29,3 +30,17 @@ Dosarul `data/bronze/telemetry/dt=2026-10-22/`, ora 17 UTC:
 | Rânduri în `telemetry` pentru aceeași oră | | 22 204 |
 
 Log-ul ingestorului: `compactat .../hour-17.parquet: 1139 fisiere, 22204 randuri`.
+
+### Carantina pe date reale (FP-204)
+
+Cinci mesaje invalide publicate manual în EMQX, fiecare de două ori (a doua oară simulează o retrimitere de la broker). Tabelul `quarantine`:
+
+| reason | detail |
+|---|---|
+| `payload_invalid` | payload invalid: Expecting value: line 1 column 1 (char 0) |
+| `in_afara_limitelor` | motor/temperatura=-273.0 C, limite -50..250 |
+| `in_afara_limitelor` | pompa/presiune=-2.0 bar, limite 0..50 |
+| `unitate_necunoscuta` | motor/temperatura=150.0 F |
+| `valoare_nefinita` | motor/temperatura=nan C |
+
+5 rânduri, nu 10: retrimiterile nu se dublează. Defectul din captura 06 (presiune ~4,7 bar) a trecut de validare, pentru că e o anomalie reală, nu o eroare de date.
