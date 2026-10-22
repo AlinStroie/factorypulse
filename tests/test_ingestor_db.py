@@ -12,8 +12,9 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 import pytest
 
-from factorypulse.ingestor.batch import Reading
-from factorypulse.ingestor.db import MIGRATIONS, PostgresWriter, migrate
+from factorypulse.ingestor.batch import Reading, Received
+from factorypulse.ingestor.db import MIGRATIONS, PostgresWriter, WriteResult, migrate
+from factorypulse.ingestor.validate import Rejected
 
 CONNINFO = os.getenv("FP_TEST_POSTGRES")
 pytestmark = pytest.mark.skipif(not CONNINFO, reason="FP_TEST_POSTGRES nu e setat")
@@ -50,10 +51,10 @@ def _count(conninfo: str) -> object:
 def test_reprocessing_does_not_create_duplicates(conninfo: str) -> None:
     writer = PostgresWriter(conninfo)
     try:
-        assert writer.write(_readings(3)) == 3
-        assert writer.write(_readings(3)) == 0  # acelasi lot, retrimis
-        assert writer.write(_readings(4)) == 1  # lot partial nou
-        assert writer.write([]) == 0
+        assert writer.write(_readings(3)) == WriteResult(rows=3)
+        assert writer.write(_readings(3)) == WriteResult()  # acelasi lot, retrimis
+        assert writer.write(_readings(4)) == WriteResult(rows=1)  # lot partial nou
+        assert writer.write([]) == WriteResult()
     finally:
         writer.close()
     assert _count(conninfo) == 4
@@ -70,6 +71,20 @@ def test_unique_key_migration_removes_existing_duplicates(conninfo: str) -> None
     assert _count(conninfo) == 2
 
     with psycopg.connect(conninfo) as conn:
-        assert migrate(conn) == [1, 2]
+        assert migrate(conn) == [1, 2, 3]
         assert migrate(conn) == []  # a doua oara nu mai e nimic de aplicat
     assert _count(conninfo) == 1
+
+
+def test_quarantine_is_written_with_telemetry_and_is_idempotent(conninfo: str) -> None:
+    raw = b"\xff nu e json"
+    rejected = [Rejected(Received("factory/motor/t", raw, 1, 1, WHEN), "payload_invalid", "x")]
+    writer = PostgresWriter(conninfo)
+    try:
+        assert writer.write(_readings(2), rejected) == WriteResult(rows=2, quarantined=1)
+        assert writer.write(_readings(2), rejected) == WriteResult()  # lot retrimis
+    finally:
+        writer.close()
+    with psycopg.connect(conninfo) as conn:
+        rows = conn.execute("SELECT topic, payload, reason FROM quarantine").fetchall()
+    assert rows == [("factory/motor/t", raw, "payload_invalid")]

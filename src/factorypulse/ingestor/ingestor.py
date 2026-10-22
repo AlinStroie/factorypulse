@@ -29,9 +29,10 @@ from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 from psycopg.conninfo import make_conninfo
 
-from factorypulse.ingestor.batch import Batch, Reading, Received, now_utc, parse
+from factorypulse.ingestor.batch import Batch, Reading, Received, now_utc
 from factorypulse.ingestor.bronze import BronzeWriter
-from factorypulse.ingestor.db import PostgresWriter
+from factorypulse.ingestor.db import PostgresWriter, WriteResult
+from factorypulse.ingestor.validate import Rejected, validate
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ class IngestorConfig:
 
 
 class Writer(Protocol):
-    def write(self, readings: list[Reading]) -> int: ...
+    def write(self, readings: list[Reading], rejected: list[Rejected]) -> WriteResult: ...
 
 
 class Acker(Protocol):
@@ -159,26 +160,30 @@ class Ingestor:
         """Scrie lotul curent, apoi da ack. Daca scrierea esueaza, lotul ramane si se reincearca."""
         items = self._batch.items
         readings: list[Reading] = []
+        rejected: list[Rejected] = []
         for item in items:
-            try:
-                readings.append(parse(item))
-            except ValueError as exc:
-                # Carantina vine in FP-204; pana atunci mesajul e doar logat si confirmat,
-                # altfel brokerul l-ar retrimite la nesfarsit.
-                log.warning("mesaj ignorat (mid=%d): %s", item.mid, exc)
+            result = validate(item)
+            if isinstance(result, Rejected):
+                rejected.append(result)
+            else:
+                readings.append(result)
         # Bronze primeste tot lotul, inclusiv mesajele invalide, si inaintea bazei de date:
         # daca baza cade, datele se pot reincarca din bronze (ADR-020).
         if not self._batch.bronze_written:
             self._bronze.write(items)
             self._batch.bronze_written = True
-        written = self._writer.write(readings)
-        if written < len(readings):
+        # Mesajele respinse merg in carantina in aceeasi tranzactie si se confirma si ele;
+        # altfel brokerul le-ar retrimite la nesfarsit.
+        written = self._writer.write(readings, rejected)
+        if written.rows < len(readings):
             # Normal dupa o repornire: brokerul retrimite mesajele scrise, dar neconfirmate.
-            log.info("%d randuri existau deja (FP-202)", len(readings) - written)
+            log.info("%d randuri existau deja (FP-202)", len(readings) - written.rows)
+        for r in rejected:
+            log.warning("carantina %s: %s", r.reason, r.detail)
         for item in items:
             self._acker.ack(item.mid, item.qos)
         self._batch.take()
-        return written
+        return written.rows
 
 
 def make_mqtt_client(config: IngestorConfig, inbox: queue.Queue[Received]) -> mqtt.Client:

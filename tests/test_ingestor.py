@@ -11,8 +11,9 @@ from paho.mqtt.client import MQTTMessage
 
 from factorypulse.bridge.mapping import payload_for
 from factorypulse.ingestor.batch import Batch, Reading, Received, parse
-from factorypulse.ingestor.db import MIGRATIONS, pending_migrations
+from factorypulse.ingestor.db import MIGRATIONS, WriteResult, pending_migrations
 from factorypulse.ingestor.ingestor import Ingestor, IngestorConfig, make_mqtt_client
+from factorypulse.ingestor.validate import Rejected
 
 WHEN = datetime(2026, 10, 21, 8, 0, 0, tzinfo=UTC)
 INGESTED = datetime(2026, 10, 21, 8, 0, 1, tzinfo=UTC)
@@ -40,14 +41,16 @@ class FakeWriter:
         self.fail = fail
         self.batches: list[list[Reading]] = []
         self.keys: set[tuple[str, str, datetime]] = set()
+        self.quarantine: list[Rejected] = []
 
-    def write(self, readings: list[Reading]) -> int:
+    def write(self, readings: list[Reading], rejected: list[Rejected]) -> WriteResult:
         if self.fail:
             raise ConnectionError("baza indisponibila")
         self.batches.append(list(readings))
+        self.quarantine.extend(rejected)
         new = {(r.machine, r.sensor, r.ts) for r in readings} - self.keys
         self.keys |= new
-        return len(new)
+        return WriteResult(len(new), len(rejected))
 
 
 class FakeAcker:
@@ -203,16 +206,22 @@ def test_nothing_is_acked_when_write_fails() -> None:
     assert acker.acked == [1]
 
 
-def test_invalid_message_is_acked_but_not_written() -> None:
+def test_invalid_message_goes_to_quarantine_and_is_acked() -> None:
     inbox: queue.Queue[Received] = queue.Queue()
     writer, acker = FakeWriter(), FakeAcker()
-    ingestor, _ = _ingestor(inbox, writer, acker, size=2)
+    ingestor, _ = _ingestor(inbox, writer, acker, size=3)
     inbox.put(_msg(1, "nu e json"))
     inbox.put(_msg(2))
+    inbox.put(_msg(3, payload_for("motor", "temperatura", -273.0, "C", WHEN)))
+    ingestor.step()
     ingestor.step()
     assert ingestor.step() == 1
     assert [r.machine for r in writer.batches[0]] == ["motor"]
-    assert acker.acked == [1, 2]
+    assert [(r.message.mid, r.reason) for r in writer.quarantine] == [
+        (1, "payload_invalid"),
+        (3, "in_afara_limitelor"),
+    ]
+    assert acker.acked == [1, 2, 3]
 
 
 def test_redelivered_batch_is_acked_without_new_rows() -> None:
@@ -340,5 +349,5 @@ def test_migrations_are_numbered_in_order() -> None:
 
 
 def test_pending_migrations_skips_applied() -> None:
-    assert [v for v, _ in pending_migrations({1})] == [2]
+    assert [v for v, _ in pending_migrations({1})] == [2, 3]
     assert pending_migrations({v for v, _ in MIGRATIONS}) == []
