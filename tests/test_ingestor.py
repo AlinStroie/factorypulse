@@ -1,6 +1,5 @@
 """Teste pentru ingestor: parsare, loturi, ordinea scriere -> ack si configurare."""
 
-import json
 import queue
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -10,7 +9,7 @@ import pytest
 from paho.mqtt.client import MQTTMessage
 
 from factorypulse.bridge.mapping import payload_for
-from factorypulse.ingestor.batch import Batch, Reading, Received, parse
+from factorypulse.ingestor.batch import Batch, Reading, Received
 from factorypulse.ingestor.db import MIGRATIONS, WriteResult, pending_migrations
 from factorypulse.ingestor.ingestor import Ingestor, IngestorConfig, make_mqtt_client
 from factorypulse.ingestor.validate import Rejected
@@ -104,35 +103,6 @@ def _ingestor(
         wall or FakeWallClock(),
     )
     return ingestor, clock
-
-
-# --- parsare -------------------------------------------------------------------------------
-
-
-def test_parse_reads_bridge_payload() -> None:
-    reading = parse(_msg(0))
-    assert reading == Reading("motor", "temperatura", WHEN, 65.0, "C", INGESTED)
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        "nu e json",
-        json.dumps({"machine": "motor", "sensor": "t", "value": 1.0, "unit": "C"}),
-        json.dumps({"machine": "m", "sensor": "s", "ts": "ieri", "value": 1.0, "unit": "C"}),
-        json.dumps(
-            {"machine": "m", "sensor": "s", "ts": WHEN.isoformat(), "value": "x", "unit": "C"}
-        ),
-        json.dumps(
-            {"machine": "m", "sensor": "s", "ts": "2026-10-21T08:00:00", "value": 1, "unit": "C"}
-        ),
-        json.dumps([1, 2, 3]),
-    ],
-    ids=["json", "fara-ts", "ts-invalid", "valoare-text", "ts-fara-fus", "nu-e-obiect"],
-)
-def test_parse_rejects_bad_payloads(payload: str) -> None:
-    with pytest.raises(ValueError, match="payload invalid"):
-        parse(_msg(1, payload))
 
 
 # --- lot -----------------------------------------------------------------------------------

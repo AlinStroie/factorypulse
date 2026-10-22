@@ -1,8 +1,7 @@
-"""Parsarea mesajelor si gruparea lor in loturi. Fara retea, ca sa se poata testa direct."""
+"""Mesajele primite si gruparea lor in loturi. Fara retea, ca sa se poata testa direct."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -26,29 +25,6 @@ class Reading:
     value: float
     unit: str
     ingestion_ts: datetime
-
-
-def parse(message: Received) -> Reading:
-    """Payload v1 (ADR-021) -> Reading. Ridica ValueError daca mesajul nu se poate citi.
-
-    Validarea completa a contractului (versiune, fereastra de timp) e in FP-208.
-    """
-    try:
-        data = json.loads(message.payload)
-        ts = datetime.fromisoformat(data["ts"])
-        reading = Reading(
-            machine=str(data["machine"]),
-            sensor=str(data["sensor"]),
-            ts=ts,
-            value=float(data["value"]),
-            unit=str(data["unit"]),
-            ingestion_ts=message.ingestion_ts,
-        )
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(f"payload invalid: {exc}") from exc
-    if ts.tzinfo is None:
-        raise ValueError("payload invalid: ts fara fus orar")
-    return reading
 
 
 @dataclass
