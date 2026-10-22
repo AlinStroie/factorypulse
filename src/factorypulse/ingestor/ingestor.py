@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -50,6 +51,8 @@ class IngestorConfig:
     pg_user: str = "factory"
     pg_password: str | None = None
     pg_db: str = "factorypulse"
+    # Optiuni libpq, de exemplu `-c search_path=...` (testele de integrare isi aleg schema).
+    pg_options: str | None = None
     # Lotul nu poate depasi max_inflight din broker: peste el, brokerul nu mai trimite
     # pana nu primeste ack-uri. In docker-compose.yml, EMQX are max_inflight = 1000.
     batch_size: int = 500
@@ -72,6 +75,7 @@ class IngestorConfig:
             pg_user=os.getenv("POSTGRES_USER", defaults.pg_user),
             pg_password=os.getenv("POSTGRES_PASSWORD") or None,
             pg_db=os.getenv("POSTGRES_DB", defaults.pg_db),
+            pg_options=os.getenv("POSTGRES_OPTIONS") or None,
             batch_size=int(os.getenv("INGEST_BATCH_SIZE", str(defaults.batch_size))),
             batch_wait_s=float(os.getenv("INGEST_BATCH_WAIT_S", str(defaults.batch_wait_s))),
             bronze_dir=Path(os.getenv("BRONZE_DIR", str(defaults.bronze_dir))),
@@ -85,6 +89,7 @@ class IngestorConfig:
             user=self.pg_user,
             password=self.pg_password,
             dbname=self.pg_db,
+            options=self.pg_options,
         )
 
 
@@ -143,6 +148,10 @@ class Ingestor:
         written = self.flush() if self._batch.is_due(self._clock()) else 0
         self.compact_if_due()
         return written
+
+    def flush_pending(self) -> int:
+        """La oprire: scrie lotul inceput, ca mesajele lui sa nu astepte retrimiterea."""
+        return self.flush() if self._batch.items else 0
 
     def compact_if_due(self) -> None:
         """O data pe ora (si la pornire), compacteaza orele terminate din bronze."""
@@ -222,7 +231,9 @@ def make_mqtt_client(config: IngestorConfig, inbox: queue.Queue[Received]) -> mq
     return client
 
 
-def run(config: IngestorConfig) -> None:
+def run(config: IngestorConfig, stop: threading.Event | None = None) -> None:
+    """Bucla ingestorului. Ruleaza pana cand `stop` e setat (sau la nesfarsit, fara `stop`)."""
+    stop = stop or threading.Event()
     inbox: queue.Queue[Received] = queue.Queue()
     writer = PostgresWriter(config.conninfo())
     mqtt_client = make_mqtt_client(config, inbox)
@@ -234,19 +245,25 @@ def run(config: IngestorConfig) -> None:
     mqtt_client.loop_start()
     backoff = 1.0
     try:
-        while True:
+        while not stop.is_set():
             try:
                 written = ingestor.step()
             except (psycopg.Error, OSError) as exc:
                 # Lotul ramane in memorie si nu e confirmat. Cat timp baza sau discul sunt
                 # indisponibile, brokerul opreste livrarea la max_inflight mesaje neconfirmate.
                 log.warning("scriere esuata (%s), reincerc in %.0f s", exc, backoff)
-                time.sleep(backoff)
+                stop.wait(backoff)
                 backoff = min(backoff * 2, config.max_backoff_s)
             else:
                 backoff = 1.0
                 if written:
                     log.debug("scrise %d randuri", written)
+        # Oprire ceruta: lotul inceput se scrie si se confirma inainte de deconectare.
+        # Daca scrierea esueaza, mesajele raman neconfirmate si brokerul le retrimite.
+        try:
+            ingestor.flush_pending()
+        except (psycopg.Error, OSError) as exc:
+            log.warning("lotul final nu s-a scris (%s); brokerul il va retrimite", exc)
     finally:
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
