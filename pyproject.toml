@@ -30,6 +30,7 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+markers = ["integration: are nevoie de TimescaleDB si EMQX reale (vezi tests/conftest.py)"]
 
 [tool.coverage.run]
 source = ["factorypulse"]

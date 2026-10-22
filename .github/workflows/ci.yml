@@ -8,6 +8,36 @@ on:
 jobs:
   check:
     runs-on: ubuntu-24.04
+
+    # Aceleasi imagini ca in docker-compose.yml. Testele de integrare (tests/conftest.py)
+    # ruleaza pe ele; GitHub porneste pasii abia cand healthcheck-urile trec.
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.17.2-pg16
+        env:
+          POSTGRES_USER: factory
+          # Doar pentru containerul efemer din CI, nu e un secret.
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: factorypulse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U factory -d factorypulse"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      emqx:
+        image: emqx/emqx:5.8.1
+        env:
+          EMQX_MQTT__MAX_INFLIGHT: "1000"
+        ports: ["1883:1883"]
+        options: >-
+          --health-cmd "/opt/emqx/bin/emqx ctl status"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+
+    env:
+      FP_TEST_POSTGRES: host=127.0.0.1 port=5432 user=factory password=ci-only dbname=factorypulse
+      FP_TEST_MQTT: 127.0.0.1:1883
+      # Un test de integrare sarit in CI devine esec: altfel CI-ul ar fi verde fara verificare.
+      FP_REQUIRE_INTEGRATION: "1"
+
     steps:
       - uses: actions/checkout@v7
 
@@ -19,5 +49,5 @@ jobs:
       - name: Instaleaza dependintele de dezvoltare
         run: python -m pip install -e ".[dev]"
 
-      - name: Verificari (lint, format, tipuri, teste)
+      - name: Verificari (lint, format, tipuri, teste unitare si de integrare)
         run: make check

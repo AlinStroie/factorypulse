@@ -1,12 +1,8 @@
-"""Teste pe un TimescaleDB real. Ruleaza doar daca FP_TEST_POSTGRES este setat.
+"""Teste pe un TimescaleDB real (marcate `integration`, vezi tests/conftest.py).
 
-Exemplu: FP_TEST_POSTGRES="host=127.0.0.1 user=factory password=... dbname=factorypulse"
 Fiecare test lucreaza intr-o schema proprie, stearsa la final, deci nu atinge datele live.
-In CI, containerele vin in FP-206.
 """
 
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -16,8 +12,7 @@ from factorypulse.ingestor.batch import Reading, Received
 from factorypulse.ingestor.db import MIGRATIONS, PostgresWriter, WriteResult, migrate
 from factorypulse.ingestor.validate import Rejected
 
-CONNINFO = os.getenv("FP_TEST_POSTGRES")
-pytestmark = pytest.mark.skipif(not CONNINFO, reason="FP_TEST_POSTGRES nu e setat")
+pytestmark = pytest.mark.integration
 
 WHEN = datetime(2000, 1, 1, 0, 0, 0, tzinfo=UTC)
 
@@ -29,16 +24,8 @@ def _readings(n: int) -> list[Reading]:
 
 
 @pytest.fixture
-def conninfo() -> Iterator[str]:
-    """Conninfo cu search_path pe o schema temporara."""
-    assert CONNINFO is not None
-    schema = f"fp_test_{os.getpid()}"
-    with psycopg.connect(CONNINFO, autocommit=True) as conn:
-        conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-        conn.execute(f"CREATE SCHEMA {schema}")
-    yield f"{CONNINFO} options='-c search_path={schema},public'"
-    with psycopg.connect(CONNINFO, autocommit=True) as conn:
-        conn.execute(f"DROP SCHEMA {schema} CASCADE")
+def conninfo(pg_conninfo: str) -> str:
+    return pg_conninfo
 
 
 def _count(conninfo: str) -> object:
