@@ -1,10 +1,11 @@
-"""Ingestor: citeste telemetria din MQTT si o scrie in TimescaleDB, pe loturi.
+"""Ingestor: citeste telemetria din MQTT si o scrie in bronze si in TimescaleDB, pe loturi.
 
 Doua thread-uri:
 - thread-ul paho primeste mesajele si le pune intr-o coada (nu face nimic lent);
-- bucla principala scoate din coada, strange loturi si le scrie in baza de date.
+- bucla principala scoate din coada, strange loturi si le scrie: intai bronze (Parquet),
+  apoi baza de date (ADR-020).
 
-Ack-ul catre broker se trimite abia dupa commit. Daca procesul cade inainte,
+Ack-ul catre broker se trimite abia dupa ambele scrieri. Daca procesul cade inainte,
 brokerul retrimite mesajele, deci nu se pierd (AC FP-201).
 """
 
@@ -14,8 +15,10 @@ import logging
 import os
 import queue
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Protocol
 
 import paho.mqtt.client as mqtt
@@ -27,6 +30,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 from psycopg.conninfo import make_conninfo
 
 from factorypulse.ingestor.batch import Batch, Reading, Received, now_utc, parse
+from factorypulse.ingestor.bronze import BronzeWriter
 from factorypulse.ingestor.db import PostgresWriter
 
 log = logging.getLogger(__name__)
@@ -50,6 +54,7 @@ class IngestorConfig:
     batch_size: int = 500
     batch_wait_s: float = 1.0
     max_backoff_s: float = 30.0
+    bronze_dir: Path = Path("data/bronze")
 
     @classmethod
     def from_env(cls) -> IngestorConfig:
@@ -68,6 +73,7 @@ class IngestorConfig:
             pg_db=os.getenv("POSTGRES_DB", defaults.pg_db),
             batch_size=int(os.getenv("INGEST_BATCH_SIZE", str(defaults.batch_size))),
             batch_wait_s=float(os.getenv("INGEST_BATCH_WAIT_S", str(defaults.batch_wait_s))),
+            bronze_dir=Path(os.getenv("BRONZE_DIR", str(defaults.bronze_dir))),
         )
 
     def conninfo(self) -> str:
@@ -89,22 +95,38 @@ class Acker(Protocol):
     def ack(self, mid: int, qos: int) -> Any: ...
 
 
+class Bronze(Protocol):
+    def write(self, items: Sequence[Received]) -> Any: ...
+
+    def compact(self, before: datetime) -> int: ...
+
+
+# Compactarea unei ore incepe la un minut dupa ce s-a terminat: un lot inceput la 10:59:59
+# se scrie pana la 11:00:01, iar fisierul lui trebuie sa intre in compactarea orei 10.
+COMPACT_GRACE = timedelta(minutes=1)
+
+
 class Ingestor:
-    """Bucla principala, fara retea proprie: primeste coada, writer-ul si acker-ul din afara."""
+    """Bucla principala, fara retea proprie: primeste coada si destinatiile din afara."""
 
     def __init__(
         self,
         inbox: queue.Queue[Received],
+        bronze: Bronze,
         writer: Writer,
         acker: Acker,
         batch: Batch,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = now_utc,
     ) -> None:
         self._inbox = inbox
+        self._bronze = bronze
         self._writer = writer
         self._acker = acker
         self._batch = batch
         self._clock = clock
+        self._wall_clock = wall_clock
+        self._compacted_until: datetime | None = None
 
     def step(self) -> int:
         """Asteapta cel mult cat mai are lotul curent, apoi scrie lotul daca e gata.
@@ -117,9 +139,21 @@ class Ingestor:
             pass
         else:
             self._batch.add(item, self._clock())
-        if self._batch.is_due(self._clock()):
-            return self.flush()
-        return 0
+        written = self.flush() if self._batch.is_due(self._clock()) else 0
+        self.compact_if_due()
+        return written
+
+    def compact_if_due(self) -> None:
+        """O data pe ora (si la pornire), compacteaza orele terminate din bronze."""
+        until = (self._wall_clock() - COMPACT_GRACE).replace(minute=0, second=0, microsecond=0)
+        if until == self._compacted_until:
+            return
+        self._compacted_until = until
+        try:
+            self._bronze.compact(before=until)
+        except OSError as exc:
+            # Fisierele mici raman pe disc si intra in compactarea de ora viitoare.
+            log.warning("compactarea bronze a esuat: %s", exc)
 
     def flush(self) -> int:
         """Scrie lotul curent, apoi da ack. Daca scrierea esueaza, lotul ramane si se reincearca."""
@@ -132,7 +166,11 @@ class Ingestor:
                 # Carantina vine in FP-204; pana atunci mesajul e doar logat si confirmat,
                 # altfel brokerul l-ar retrimite la nesfarsit.
                 log.warning("mesaj ignorat (mid=%d): %s", item.mid, exc)
-        # FP-203: bronze (Parquet) se scrie aici, inaintea TimescaleDB (ADR-020).
+        # Bronze primeste tot lotul, inclusiv mesajele invalide, si inaintea bazei de date:
+        # daca baza cade, datele se pot reincarca din bronze (ADR-020).
+        if not self._batch.bronze_written:
+            self._bronze.write(items)
+            self._batch.bronze_written = True
         written = self._writer.write(readings)
         if written < len(readings):
             # Normal dupa o repornire: brokerul retrimite mesajele scrise, dar neconfirmate.
@@ -172,7 +210,7 @@ def make_mqtt_client(config: IngestorConfig, inbox: queue.Queue[Received]) -> mq
         log.info("abonat la %s", config.mqtt_topic)
 
     def on_message(client: mqtt.Client, userdata: Any, msg: MQTTMessage) -> None:
-        inbox.put(Received(msg.payload, msg.mid, msg.qos, now_utc()))
+        inbox.put(Received(msg.topic, msg.payload, msg.mid, msg.qos, now_utc()))
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -183,7 +221,9 @@ def run(config: IngestorConfig) -> None:
     inbox: queue.Queue[Received] = queue.Queue()
     writer = PostgresWriter(config.conninfo())
     mqtt_client = make_mqtt_client(config, inbox)
-    ingestor = Ingestor(inbox, writer, mqtt_client, Batch(config.batch_size, config.batch_wait_s))
+    bronze = BronzeWriter(config.bronze_dir)
+    batch = Batch(config.batch_size, config.batch_wait_s)
+    ingestor = Ingestor(inbox, bronze, writer, mqtt_client, batch)
 
     mqtt_client.connect_async(config.mqtt_host, config.mqtt_port)
     mqtt_client.loop_start()
@@ -192,10 +232,10 @@ def run(config: IngestorConfig) -> None:
         while True:
             try:
                 written = ingestor.step()
-            except psycopg.Error as exc:
-                # Lotul ramane in memorie si nu e confirmat. Cat timp baza e cazuta, brokerul
-                # opreste livrarea la max_inflight mesaje neconfirmate (presiune inapoi).
-                log.warning("TimescaleDB indisponibil (%s), reincerc in %.0f s", exc, backoff)
+            except (psycopg.Error, OSError) as exc:
+                # Lotul ramane in memorie si nu e confirmat. Cat timp baza sau discul sunt
+                # indisponibile, brokerul opreste livrarea la max_inflight mesaje neconfirmate.
+                log.warning("scriere esuata (%s), reincerc in %.0f s", exc, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, config.max_backoff_s)
             else:

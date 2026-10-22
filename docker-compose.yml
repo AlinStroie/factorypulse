@@ -89,6 +89,8 @@ services:
   ingestor:
     build: .
     command: ["python", "-m", "factorypulse.ingestor.ingestor"]
+    volumes:
+      - ./data:/app/data  # bronze: data/bronze/telemetry/dt=AAAA-LL-ZZ/
     environment:
       MQTT_HOST: emqx
       MQTT_PORT: "1883"

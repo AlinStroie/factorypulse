@@ -2,6 +2,7 @@
 
 import json
 import queue
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,7 +22,7 @@ def _msg(mid: int, payload: str | None = None) -> Received:
     # ts diferit per mid, ca mesajele sa nu fie duplicate unele ale altora
     when = WHEN + timedelta(seconds=mid)
     body = payload if payload is not None else payload_for("motor", "temperatura", 65.0, "C", when)
-    return Received(body.encode(), mid, 1, INGESTED)
+    return Received("factory/motor/temperatura", body.encode(), mid, 1, INGESTED)
 
 
 class FakeClock:
@@ -57,11 +58,49 @@ class FakeAcker:
         self.acked.append(mid)
 
 
+class FakeBronze:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.batches: list[list[int]] = []
+        self.compactions: list[datetime] = []
+
+    def write(self, items: Sequence[Received]) -> Any:
+        if self.fail:
+            raise OSError("disc plin")
+        self.batches.append([m.mid for m in items])
+
+    def compact(self, before: datetime) -> int:
+        self.compactions.append(before)
+        return 0
+
+
+class FakeWallClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 10, 21, 10, 30, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
 def _ingestor(
-    inbox: "queue.Queue[Received]", writer: FakeWriter, acker: FakeAcker, size: int = 3
+    inbox: "queue.Queue[Received]",
+    writer: FakeWriter,
+    acker: FakeAcker,
+    size: int = 3,
+    bronze: FakeBronze | None = None,
+    wall: FakeWallClock | None = None,
 ) -> tuple[Ingestor, FakeClock]:
     clock = FakeClock()
-    return Ingestor(inbox, writer, acker, Batch(size, 1.0), clock), clock
+    ingestor = Ingestor(
+        inbox,
+        bronze or FakeBronze(),
+        writer,
+        acker,
+        Batch(size, 1.0),
+        clock,
+        wall or FakeWallClock(),
+    )
+    return ingestor, clock
 
 
 # --- parsare -------------------------------------------------------------------------------
@@ -190,6 +229,70 @@ def test_redelivered_batch_is_acked_without_new_rows() -> None:
     assert len(writer.keys) == 1
 
 
+def test_bronze_gets_whole_batch_before_database() -> None:
+    inbox: queue.Queue[Received] = queue.Queue()
+    writer, acker, bronze = FakeWriter(), FakeAcker(), FakeBronze()
+    ingestor, _ = _ingestor(inbox, writer, acker, size=2, bronze=bronze)
+    inbox.put(_msg(1, "nu e json"))
+    inbox.put(_msg(2))
+    ingestor.step()
+    ingestor.step()
+    assert bronze.batches == [[1, 2]]  # si mesajul invalid
+    assert len(writer.batches[0]) == 1
+
+
+def test_nothing_reaches_database_when_bronze_fails() -> None:
+    inbox: queue.Queue[Received] = queue.Queue()
+    writer, acker, bronze = FakeWriter(), FakeAcker(), FakeBronze(fail=True)
+    ingestor, _ = _ingestor(inbox, writer, acker, size=1, bronze=bronze)
+    inbox.put(_msg(1))
+    with pytest.raises(OSError):
+        ingestor.step()
+    assert writer.batches == [] and acker.acked == []
+
+
+def test_bronze_is_not_rewritten_when_database_retry() -> None:
+    inbox: queue.Queue[Received] = queue.Queue()
+    writer, acker, bronze = FakeWriter(fail=True), FakeAcker(), FakeBronze()
+    ingestor, _ = _ingestor(inbox, writer, acker, size=1, bronze=bronze)
+    inbox.put(_msg(1))
+    with pytest.raises(ConnectionError):
+        ingestor.step()
+    writer.fail = False
+    assert ingestor.step() == 1
+    assert bronze.batches == [[1]]
+    assert acker.acked == [1]
+
+
+def test_compaction_runs_at_start_and_once_per_hour() -> None:
+    inbox: queue.Queue[Received] = queue.Queue()
+    bronze, wall = FakeBronze(), FakeWallClock()
+    ingestor, _ = _ingestor(inbox, FakeWriter(), FakeAcker(), bronze=bronze, wall=wall)
+    ingestor.step()
+    ingestor.step()
+    wall.now = datetime(2026, 10, 21, 11, 0, 30, tzinfo=UTC)  # in perioada de gratie
+    ingestor.step()
+    wall.now = datetime(2026, 10, 21, 11, 1, 0, tzinfo=UTC)
+    ingestor.step()
+    assert bronze.compactions == [
+        datetime(2026, 10, 21, 10, tzinfo=UTC),
+        datetime(2026, 10, 21, 11, tzinfo=UTC),
+    ]
+
+
+def test_failed_compaction_does_not_stop_ingestion() -> None:
+    class BrokenBronze(FakeBronze):
+        def compact(self, before: datetime) -> int:
+            raise OSError("fisier blocat")
+
+    inbox: queue.Queue[Received] = queue.Queue()
+    acker = FakeAcker()
+    ingestor, _ = _ingestor(inbox, FakeWriter(), acker, size=1, bronze=BrokenBronze())
+    inbox.put(_msg(1))
+    assert ingestor.step() == 1
+    assert acker.acked == [1]
+
+
 # --- MQTT si configurare -------------------------------------------------------------------
 
 
@@ -201,7 +304,12 @@ def test_on_message_only_queues() -> None:
     msg.qos = 1
     client.on_message(client, None, msg)  # type: ignore[misc]
     received = inbox.get_nowait()
-    assert (received.mid, received.qos, received.payload) == (7, 1, b"{}")
+    assert (received.topic, received.mid, received.qos, received.payload) == (
+        "factory/motor/temperatura",
+        7,
+        1,
+        b"{}",
+    )
     assert received.ingestion_ts.tzinfo is not None
 
 
@@ -210,7 +318,9 @@ def test_config_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("POSTGRES_HOST", "timescaledb")
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
     monkeypatch.setenv("INGEST_BATCH_SIZE", "50")
+    monkeypatch.setenv("BRONZE_DIR", "/date/bronze")
     config = IngestorConfig.from_env()
+    assert config.bronze_dir.as_posix() == "/date/bronze"
     assert (config.mqtt_host, config.pg_host, config.batch_size) == ("emqx", "timescaledb", 50)
     assert "password=secret" in config.conninfo()
 
