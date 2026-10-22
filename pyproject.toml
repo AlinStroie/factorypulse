@@ -7,7 +7,7 @@ name = "factorypulse"
 version = "0.1.0"
 description = "Platforma de date industriale: ingestie, calitate, detectie de anomalii, agent RCA."
 requires-python = ">=3.12"
-dependencies = ["asyncua>=1.1", "paho-mqtt>=2.0", "psycopg[binary]>=3.2", "pyarrow>=17"]
+dependencies = ["asyncua>=1.1", "paho-mqtt>=2.0", "psycopg[binary]>=3.2", "pyarrow>=17", "pydantic>=2.9"]
 
 [project.optional-dependencies]
 # pandas e doar pentru teste pana la FP-205 (silver), cand devine dependinta de rulare
