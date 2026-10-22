@@ -31,6 +31,19 @@ Dosarul `data/bronze/telemetry/dt=2026-10-22/`, ora 17 UTC:
 
 Log-ul ingestorului: `compactat .../hour-17.parquet: 1139 fisiere, 22204 randuri`.
 
+### Silver comparat cu TimescaleDB (FP-205)
+
+Silver construit din bronze pentru 22 oct, comparat cu `telemetry` pe același interval de sosire (17:31:25–18:54:51 UTC):
+
+| | Silver | TimescaleDB |
+|---|---|---|
+| Rânduri | 64 806 | 64 806 |
+| Chei comune `(machine, sensor, ts)` | 64 806 | 64 806 |
+| Valori diferite | 0 | |
+| Duplicate | 0 | 0 |
+
+Două căi de procesare separate (ingestorul în timp real, jobul batch din bronze), aceeași definiție a lui „valid”, același rezultat.
+
 ### Carantina pe date reale (FP-204)
 
 Cinci mesaje invalide publicate manual în EMQX, fiecare de două ori (a doua oară simulează o retrimitere de la broker). Tabelul `quarantine`:

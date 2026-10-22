@@ -17,6 +17,7 @@ docker compose up -d --build  # EMQX, TimescaleDB, Grafana, simulator, bridge, i
 - Grafana: http://localhost:3000 (sursa TimescaleDB e provizionata automat)
 - Telemetria: tabelul `telemetry` din TimescaleDB, scris de ingestor in loturi (500 de mesaje sau 1 s)
 - Bronze: `data/bronze/telemetry/dt=<zi>/`, mesajele brute in Parquet (`pandas.read_parquet("data/bronze/telemetry")`)
+- Silver: `python -m factorypulse.silver --from AAAA-LL-ZZ --to AAAA-LL-ZZ` scrie `data/silver/telemetry/date=<zi>/`, curat si deduplicat
 - Verificare fara pierderi: `python scripts/verify_no_loss.py --minutes 10`
 - Etichetele de adevar: `data/ground_truth/ground_truth_<pornire>.json`, cate una per rulare
 
