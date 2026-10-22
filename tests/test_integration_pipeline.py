@@ -93,17 +93,19 @@ class RunningIngestor:
         assert not self._thread.is_alive(), "ingestorul nu s-a oprit"
 
 
-def _count(conninfo: str, sql: str) -> int:
+def _count(conninfo: str, table: str, where: str = "true") -> int:
+    """Numara randurile din `table` (calificat cu schema); 0 daca tabelul nu exista inca.
+
+    Ingestorul creeaza tabelele abia la prima scriere, iar un nume necalificat ar putea
+    gasi tabelul din `public` al stack-ului live.
+    """
     with psycopg.connect(conninfo) as conn:
-        row = conn.execute(sql).fetchone()
+        exists = conn.execute("SELECT to_regclass(%s) IS NOT NULL", (table,)).fetchone()
+        if not (exists and exists[0]):
+            return 0
+        row = conn.execute(f"SELECT count(*) FROM {table} WHERE {where}").fetchone()
     assert row is not None and isinstance(row[0], int)
     return row[0]
-
-
-def _table_exists(conninfo: str, name: str) -> bool:
-    with psycopg.connect(conninfo) as conn:
-        row = conn.execute("SELECT to_regclass(%s) IS NOT NULL", (name,)).fetchone()
-    return bool(row and row[0])
 
 
 def _bronze_rows(root: Path, sensor_prefix: str) -> int:
@@ -115,17 +117,20 @@ def _bronze_rows(root: Path, sensor_prefix: str) -> int:
 
 
 def test_pipeline_end_to_end(
-    config: IngestorConfig, pg_conninfo: str, publisher: Callable[[str, str], None]
+    config: IngestorConfig,
+    pg_conninfo: str,
+    pg_schema: str,
+    publisher: Callable[[str, str], None],
 ) -> None:
+    telemetry, quarantine = f"{pg_schema}.telemetry", f"{pg_schema}.quarantine"
     ingestor = RunningIngestor(config)
     try:
         # Abonarea e asincrona: publicam un mesaj de proba pana cand ajunge in baza.
-        _wait_until(lambda: _table_exists(pg_conninfo, "telemetry"))
         probe = payload_for("motor", "proba", 1.0, "C", datetime.now(UTC))
 
         def probe_arrived() -> bool:
             publisher("proba", probe)
-            return _count(pg_conninfo, "SELECT count(*) FROM telemetry") > 0
+            return _count(pg_conninfo, telemetry) > 0
 
         _wait_until(probe_arrived)
 
@@ -148,12 +153,12 @@ def test_pipeline_end_to_end(
         for payload in invalid:
             publisher("s", payload)
 
-        rows = "SELECT count(*) FROM telemetry WHERE sensor LIKE 's_'"
-        _wait_until(lambda: _count(pg_conninfo, rows) == 20)
-        _wait_until(lambda: _count(pg_conninfo, "SELECT count(*) FROM quarantine") == 3)
+        valid_rows = "sensor LIKE 's_'"
+        _wait_until(lambda: _count(pg_conninfo, telemetry, valid_rows) == 20)
+        _wait_until(lambda: _count(pg_conninfo, quarantine) == 3)
         _wait_until(lambda: _bronze_rows(config.bronze_dir, "s") == 28)
         with psycopg.connect(pg_conninfo) as conn:
-            reasons = sorted(r for (r,) in conn.execute("SELECT reason FROM quarantine"))
+            reasons = sorted(r for (r,) in conn.execute(f"SELECT reason FROM {quarantine}"))
         assert reasons == ["in_afara_limitelor", "payload_invalid", "versiune_nesuportata"]
     finally:
         ingestor.stop()
@@ -167,7 +172,7 @@ def test_pipeline_end_to_end(
     finally:
         restarted.stop()
     assert _bronze_rows(config.bronze_dir, "") == bronze_before
-    assert _count(pg_conninfo, rows) == 20
+    assert _count(pg_conninfo, telemetry, valid_rows) == 20
 
 
 @pytest.fixture(autouse=True)
