@@ -84,6 +84,7 @@ ADR-001…018 au fost acceptate înainte de Sprintul 1. ADR-019…022 au fost ad
 | ADR-020 | Bronze e sursa de adevăr; întâi bronze, apoi TimescaleDB; silver doar din bronze | Doar TimescaleDB; doar Parquet | Reprocesare sigură, o singură sursă de adevăr |
 | ADR-021 | Contract de mesaj versionat; `ts` = timpul evenimentului (SourceTimestamp, UTC) | Timestamp la citire; Avro | Telemetria și eticheta de adevăr pe același ceas, ca evaluarea să fie corectă |
 | ADR-022 | Observabilitatea pipeline-ului: prospețime, latență, carantină, cu Prometheus și Grafana | OpenTelemetry complet; doar loguri | Incidentul cel mai frecvent („lipsesc date”) trebuie să genereze alertă |
+| ADR-025 | Bronze: payload brut, partiționat după ziua sosirii; un fișier per lot și compactare orară | JSON Lines + conversie; loturi de 1 minut | Durabil înainte de ack, fără mii de fișiere mici pe termen lung |
 
 ## 5. Sprinturi (2 săptămâni, ~25 ore fiecare)
 

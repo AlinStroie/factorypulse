@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 class Received:
     """Un mesaj MQTT asa cum a venit. `mid` si `qos` sunt necesare pentru ack-ul manual."""
 
+    topic: str
     payload: bytes
     mid: int
     qos: int
@@ -57,6 +58,8 @@ class Batch:
     max_size: int
     max_wait_s: float
     items: list[Received] = field(default_factory=list)
+    # Lotul a ajuns deja in bronze: la reincercare (baza de date cazuta) nu se rescrie.
+    bronze_written: bool = False
     _started_at: float | None = None
 
     def add(self, item: Received, now: float) -> None:
@@ -78,6 +81,7 @@ class Batch:
 
     def take(self) -> list[Received]:
         items, self.items, self._started_at = self.items, [], None
+        self.bronze_written = False
         return items
 
 
